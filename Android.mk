@@ -84,7 +84,7 @@ LOCAL_CFLAGS += -DUSE_UBIFS
 LOCAL_C_INCLUDES +=  system/vold
 LOCAL_SRC_FILES += ubi.cpp
 
-LOCAL_REQUIRED_MODULES := ubiupdatevol
+LOCAL_REQUIRED_MODULES := ubiupdatevol nandwrite flash_eraseall flash_erase kobs-ng
 ifeq ($(HAVE_SELINUX), true)
   LOCAL_C_INCLUDES += external/libselinux/include
   LOCAL_STATIC_LIBRARIES += libselinux
