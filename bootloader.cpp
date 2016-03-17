@@ -26,13 +26,17 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#define BCB_PARTITION "/system"
+
 static int get_bootloader_message_mtd(struct bootloader_message *out, const Volume* v);
 static int set_bootloader_message_mtd(const struct bootloader_message *in, const Volume* v);
 static int get_bootloader_message_block(struct bootloader_message *out, const Volume* v);
 static int set_bootloader_message_block(const struct bootloader_message *in, const Volume* v);
+static int get_bootloader_message_fs(struct bootloader_message *out, const Volume* v);
+static int set_bootloader_message_fs(const struct bootloader_message *in, const Volume* v);
 
 int get_bootloader_message(struct bootloader_message *out) {
-    Volume* v = volume_for_path("/misc");
+    Volume* v = volume_for_path(BCB_PARTITION);
     if (v == NULL) {
       return -1;
     }
@@ -41,12 +45,11 @@ int get_bootloader_message(struct bootloader_message *out) {
     } else if (strcmp(v->fs_type, "emmc") == 0) {
         return get_bootloader_message_block(out, v);
     }
-    LOGE("unknown misc partition fs_type \"%s\"\n", v->fs_type);
-    return -1;
+    return get_bootloader_message_fs(out, v);
 }
 
 int set_bootloader_message(const struct bootloader_message *in) {
-    Volume* v = volume_for_path("/misc");
+    Volume* v = volume_for_path(BCB_PARTITION);
     if (v == NULL) {
       return -1;
     }
@@ -55,8 +58,7 @@ int set_bootloader_message(const struct bootloader_message *in) {
     } else if (strcmp(v->fs_type, "emmc") == 0) {
         return set_bootloader_message_block(in, v);
     }
-    LOGE("unknown misc partition fs_type \"%s\"\n", v->fs_type);
-    return -1;
+    return set_bootloader_message_fs(in, v);
 }
 
 // ------------------------------
@@ -198,4 +200,74 @@ static int set_bootloader_message_block(const struct bootloader_message *in,
         return -1;
     }
     return 0;
+}
+
+// ------------------------------------
+// for filesystem partitions
+// ------------------------------------
+
+static int get_bootloader_message_fs(struct bootloader_message *out,
+				     const Volume* v)
+{
+	char filename[256];
+
+	if (ensure_path_mounted(v->mount_point)) {
+		LOGE("Can't mount %s\n", v->blk_device);
+		return -1;
+	}
+	sprintf(filename, "%s/BCB", v->mount_point);
+
+	FILE* f = fopen(filename, "rb");
+	if (f == NULL) {
+		LOGE("Can't open %s\n(%s)\n", filename, strerror(errno));
+		return -1;
+	}
+	struct bootloader_message temp;
+	int count = fread(&temp, sizeof(temp), 1, f);
+	if (count != 1) {
+		LOGE("Failed reading %s\n(%s)\n", filename, strerror(errno));
+		return -1;
+	}
+	if (fclose(f) != 0) {
+		LOGE("Failed closing %s\n(%s)\n", filename, strerror(errno));
+		return -1;
+	}
+	if (ensure_path_unmounted(v->mount_point)) {
+		LOGE("Can't unmount %s\n", v->blk_device);
+		return -1;
+	}
+	memcpy(out, &temp, sizeof(temp));
+	return 0;
+}
+
+static int set_bootloader_message_fs(const struct bootloader_message *in,
+				     const Volume* v)
+{
+	char filename[256];
+
+	if (ensure_path_mounted(v->mount_point)) {
+		LOGE("Can't mount %s\n", v->blk_device);
+		return -1;
+	}
+	sprintf(filename, "%s/BCB", v->mount_point);
+
+	FILE* f = fopen(filename, "w+b");
+	if (f == NULL) {
+		LOGE("Can't open %s\n(%s)\n", filename, strerror(errno));
+		return -1;
+	}
+	int count = fwrite(in, sizeof(*in), 1, f);
+	if (count != 1) {
+		LOGE("Failed writing %s\n(%s)\n", filename, strerror(errno));
+		return -1;
+	}
+	if (fclose(f) != 0) {
+		LOGE("Failed closing %s\n(%s)\n", filename, strerror(errno));
+		return -1;
+	}
+	if (ensure_path_unmounted(v->mount_point)) {
+		LOGE("Can't unmount %s\n", v->blk_device);
+		return -1;
+	}
+	return 0;
 }
