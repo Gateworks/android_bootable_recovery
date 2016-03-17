@@ -3,6 +3,8 @@
 LOCAL_PATH := $(call my-dir)
 
 updater_src_files := \
+	../roots.cpp \
+	../bootloader.cpp \
 	install.c \
 	blockimg.c \
 	updater.c
@@ -22,7 +24,9 @@ LOCAL_SRC_FILES := $(updater_src_files)
 LOCAL_CFLAGS += -DUSE_EXT4
 LOCAL_CFLAGS += -Wno-unused-parameter
 LOCAL_C_INCLUDES += system/extras/ext4_utils
+LOCAL_C_INCLUDES += system/core/fs_mgr/include
 LOCAL_STATIC_LIBRARIES += \
+    libfs_mgr \
     libext4_utils_static \
     libsparse_static \
     libz
@@ -81,6 +85,7 @@ $(call intermediates-dir-for,EXECUTABLES,updater)/updater.o : $(inc)
 LOCAL_C_INCLUDES += $(dir $(inc))
 
 LOCAL_CFLAGS += -DUSE_UBIFS
+LOCAL_CFLAGS += -DUPDATER
 LOCAL_C_INCLUDES += external/mtd-utils/ubi-utils/include/ ./external/mtd-utils/include/
 LOCAL_STATIC_LIBRARIES += libubi
 LOCAL_SRC_FILES += ../ubi.cpp

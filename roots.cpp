@@ -36,7 +36,9 @@
 #include "make_ext4fs.h"
 extern "C" {
 #include "wipe.h"
+#ifndef UPDATER
 #include "cryptfs.h"
+#endif
 }
 
 static struct fstab *fstab = NULL;

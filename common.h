@@ -24,7 +24,11 @@
 extern "C" {
 #endif
 
+#ifdef UPDATER
+#define LOGE(...) fprintf(stdout, "E:" __VA_ARGS__)
+#else
 #define LOGE(...) ui_print("E:" __VA_ARGS__)
+#endif
 #define LOGW(...) fprintf(stdout, "W:" __VA_ARGS__)
 #define LOGI(...) fprintf(stdout, "I:" __VA_ARGS__)
 

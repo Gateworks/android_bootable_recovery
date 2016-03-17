@@ -47,6 +47,7 @@
 #include "updater.h"
 #include "install.h"
 #include "tune2fs.h"
+#include "roots.h"
 
 #ifdef USE_EXT4
 #include "make_ext4fs.h"
@@ -96,103 +97,24 @@ char* PrintSha1(const uint8_t* digest) {
 }
 
 
-// mount(fs_type, partition_type, location, mount_point)
-//
-//    fs_type="yaffs2" partition_type="MTD"     location=partition
-//    fs_type="ext4"   partition_type="EMMC"    location=device
-//    fs_type="ubifs"  partition_type="UBI"	location=device
+// mount(mount_point)
 Value* MountFn(const char* name, State* state, int argc, Expr* argv[]) {
     char* result = NULL;
-    if (argc != 4 && argc != 5) {
-        return ErrorAbort(state, "%s() expects 4-5 args, got %d", name, argc);
+    if (argc != 1) {
+        return ErrorAbort(state, "%s() expects 1 args, got %d", name, argc);
     }
-    char* fs_type;
-    char* partition_type;
-    char* location;
     char* mount_point;
-    char* mount_options;
-    bool has_mount_options;
-    if (argc == 5) {
-        has_mount_options = true;
-        if (ReadArgs(state, argv, 5, &fs_type, &partition_type,
-                 &location, &mount_point, &mount_options) < 0) {
-            return NULL;
-        }
-    } else {
-        has_mount_options = false;
-        if (ReadArgs(state, argv, 4, &fs_type, &partition_type,
-                 &location, &mount_point) < 0) {
-            return NULL;
-        }
+    if (ReadArgs(state, argv, 1, &mount_point) < 0) {
+        return NULL;
     }
 
-    if (strlen(fs_type) == 0) {
-        ErrorAbort(state, "fs_type argument to %s() can't be empty", name);
-        goto done;
-    }
-    if (strlen(partition_type) == 0) {
-        ErrorAbort(state, "partition_type argument to %s() can't be empty",
-                   name);
-        goto done;
-    }
-    if (strlen(location) == 0) {
-        ErrorAbort(state, "location argument to %s() can't be empty", name);
-        goto done;
-    }
-    if (strlen(mount_point) == 0) {
-        ErrorAbort(state, "mount_point argument to %s() can't be empty", name);
-        goto done;
-    }
-
-    char *secontext = NULL;
-
-    if (sehandle) {
-        selabel_lookup(sehandle, &secontext, mount_point, 0755);
-        setfscreatecon(secontext);
-    }
-
-    mkdir(mount_point, 0755);
-
-    if (secontext) {
-        freecon(secontext);
-        setfscreatecon(NULL);
-    }
-
-    if (strcmp(partition_type, "MTD") == 0) {
-        mtd_scan_partitions();
-        const MtdPartition* mtd;
-        mtd = mtd_find_partition_by_name(location);
-        if (mtd == NULL) {
-            uiPrintf(state, "%s: no mtd partition named \"%s\"",
-                    name, location);
-            result = strdup("");
-            goto done;
-        }
-        if (mtd_mount_partition(mtd, mount_point, fs_type, 0 /* rw */) != 0) {
-            uiPrintf(state, "mtd mount of %s failed: %s\n",
-                    location, strerror(errno));
-            result = strdup("");
-            goto done;
-        }
-        result = mount_point;
-    } else {
-        if (mount(location, mount_point, fs_type,
-                  MS_NOATIME | MS_NODEV | MS_NODIRATIME,
-                  has_mount_options ? mount_options : "") < 0) {
-            uiPrintf(state, "%s: failed to mount %s at %s: %s\n",
-                    name, location, mount_point, strerror(errno));
-            result = strdup("");
-        } else {
-            result = mount_point;
-        }
-    }
+    if (ensure_path_mounted(mount_point))
+        result = strdup("");
+    else
+        result = strdup("1");
 
 done:
-    free(fs_type);
-    free(partition_type);
-    free(location);
     if (result != mount_point) free(mount_point);
-    if (has_mount_options) free(mount_options);
     return StringValue(result);
 }
 
@@ -221,7 +143,7 @@ Value* IsMountedFn(const char* name, State* state, int argc, Expr* argv[]) {
     }
 
 done:
-    if (result != mount_point) free(mount_point);
+    free(mount_point);
     return StringValue(result);
 }
 
@@ -274,124 +196,25 @@ static int exec_cmd(const char* path, char* const argv[]) {
 }
 
 
-// format(fs_type, partition_type, location, fs_size, mount_point)
-//
-//    fs_type="yaffs2" partition_type="MTD"     location=partition fs_size=<bytes> mount_point=<location>
-//    fs_type="ext4"   partition_type="EMMC"    location=device    fs_size=<bytes> mount_point=<location>
-//    fs_type="f2fs"   partition_type="EMMC"    location=device    fs_size=<bytes> mount_point=<location>
-//    if fs_size == 0, then make fs uses the entire partition.
-//    fs_type "ubifs"  partition_type="UBIFS"   location=device    fs_size=<bytes> mount_point=<localtion>
-//    if fs_size == 0, then make_ext4fs uses the entire partition.
-//    if fs_size > 0, that is the size to use
-//    if fs_size < 0, then reserve that many bytes at the end of the partition (not for "f2fs")
+// format(mount_point)
 Value* FormatFn(const char* name, State* state, int argc, Expr* argv[]) {
     char* result = NULL;
-    if (argc != 5) {
-        return ErrorAbort(state, "%s() expects 5 args, got %d", name, argc);
+    if (argc != 1) {
+        return ErrorAbort(state, "%s() expects 1 args, got %d", name, argc);
     }
-    char* fs_type;
-    char* partition_type;
-    char* location;
-    char* fs_size;
     char* mount_point;
 
-    if (ReadArgs(state, argv, 5, &fs_type, &partition_type, &location, &fs_size, &mount_point) < 0) {
+    if (ReadArgs(state, argv, 1, &mount_point) < 0) {
         return NULL;
     }
 
-    if (strlen(fs_type) == 0) {
-        ErrorAbort(state, "fs_type argument to %s() can't be empty", name);
-        goto done;
-    }
-    if (strlen(partition_type) == 0) {
-        ErrorAbort(state, "partition_type argument to %s() can't be empty",
-                   name);
-        goto done;
-    }
-    if (strlen(location) == 0) {
-        ErrorAbort(state, "location argument to %s() can't be empty", name);
-        goto done;
-    }
-
-    if (strlen(mount_point) == 0) {
-        ErrorAbort(state, "mount_point argument to %s() can't be empty", name);
-        goto done;
-    }
-
-    if (strcmp(partition_type, "MTD") == 0) {
-        mtd_scan_partitions();
-        const MtdPartition* mtd = mtd_find_partition_by_name(location);
-        if (mtd == NULL) {
-            printf("%s: no mtd partition named \"%s\"",
-                    name, location);
-            result = strdup("");
-            goto done;
-        }
-        MtdWriteContext* ctx = mtd_write_partition(mtd);
-        if (ctx == NULL) {
-            printf("%s: can't write \"%s\"", name, location);
-            result = strdup("");
-            goto done;
-        }
-        if (mtd_erase_blocks(ctx, -1) == -1) {
-            mtd_write_close(ctx);
-            printf("%s: failed to erase \"%s\"", name, location);
-            result = strdup("");
-            goto done;
-        }
-        if (mtd_write_close(ctx) != 0) {
-            printf("%s: failed to close \"%s\"", name, location);
-            result = strdup("");
-            goto done;
-        }
-        result = location;
-#ifdef USE_EXT4
-    } else if (strcmp(fs_type, "ext4") == 0) {
-        int status = make_ext4fs(location, atoll(fs_size), mount_point, sehandle);
-        if (status != 0) {
-            printf("%s: make_ext4fs failed (%d) on %s",
-                    name, status, location);
-            result = strdup("");
-            goto done;
-        }
-        result = location;
-    } else if (strcmp(fs_type, "f2fs") == 0) {
-        char *num_sectors;
-        if (asprintf(&num_sectors, "%lld", atoll(fs_size) / 512) <= 0) {
-            printf("format_volume: failed to create %s command for %s\n", fs_type, location);
-            result = strdup("");
-            goto done;
-        }
-        const char *f2fs_path = "/sbin/mkfs.f2fs";
-        const char* const f2fs_argv[] = {"mkfs.f2fs", "-t", "-d1", location, num_sectors, NULL};
-        int status = exec_cmd(f2fs_path, (char* const*)f2fs_argv);
-        free(num_sectors);
-        if (status != 0) {
-            printf("%s: mkfs.f2fs failed (%d) on %s",
-                    name, status, location);
-            result = strdup("");
-            goto done;
-        }
-        result = location;
-#endif
-
-#ifdef USE_UBIFS
-    } else if (strcmp(fs_type, "ubifs") == 0) {
-
-            if (ubiVolumeFormat(location) != 0)
-                    goto done;
-
-            result = location;
-#endif
-    } else {
-        printf("%s: unsupported fs_type \"%s\" partition_type \"%s\"",
-                name, fs_type, partition_type);
-    }
+    if (format_volume(mount_point))
+        result = strdup("");
+    else
+        result = strdup("1");
 
 done:
-    free(fs_type);
-    free(partition_type);
-    if (result != location) free(location);
+    free(mount_point);
     return StringValue(result);
 }
 
@@ -1657,14 +1480,13 @@ Value* RebootNowFn(const char* name, State* state, int argc, Expr* argv[]) {
 
     char buffer[80];
 
-    // zero out the 'command' field of the bootloader message.
-    memset(buffer, 0, sizeof(((struct bootloader_message*)0)->command));
-    FILE* f = fopen(filename, "r+b");
-    fseek(f, offsetof(struct bootloader_message, command), SEEK_SET);
-    fwrite(buffer, sizeof(((struct bootloader_message*)0)->command), 1, f);
-    fclose(f);
-    free(filename);
-
+    struct bootloader_message msg;
+    memset(&msg, 0, sizeof(msg));
+    if (get_bootloader_message(&msg))
+        printf("Failed getting BCB\n");
+    memset(msg.command, 0, sizeof(msg.command));
+    if (set_bootloader_message(&msg))
+        printf("Failed setting BCB\n");
     strcpy(buffer, "reboot,");
     if (property != NULL) {
         strncat(buffer, property, sizeof(buffer)-10);
@@ -1697,20 +1519,13 @@ Value* SetStageFn(const char* name, State* state, int argc, Expr* argv[]) {
     char* stagestr;
     if (ReadArgs(state, argv, 2, &filename, &stagestr) < 0) return NULL;
 
-    // Store this value in the misc partition, immediately after the
-    // bootloader message that the main recovery uses to save its
-    // arguments in case of the device restarting midway through
-    // package installation.
-    FILE* f = fopen(filename, "r+b");
-    fseek(f, offsetof(struct bootloader_message, stage), SEEK_SET);
-    int to_write = strlen(stagestr)+1;
-    int max_size = sizeof(((struct bootloader_message*)0)->stage);
-    if (to_write > max_size) {
-        to_write = max_size;
-        stagestr[max_size-1] = 0;
-    }
-    fwrite(stagestr, to_write, 1, f);
-    fclose(f);
+    struct bootloader_message msg;
+    memset(&msg, 0, sizeof(msg));
+    if (get_bootloader_message(&msg))
+        printf("Failed getting BCB\n");
+    strncpy(msg.stage, stagestr, sizeof(msg.stage)-1);
+    if (set_bootloader_message(&msg))
+        printf("Failed setting BCB\n");
 
     free(stagestr);
     return StringValue(filename);
@@ -1719,21 +1534,11 @@ Value* SetStageFn(const char* name, State* state, int argc, Expr* argv[]) {
 // Return the value most recently saved with SetStageFn.  The argument
 // is the block device for the misc partition.
 Value* GetStageFn(const char* name, State* state, int argc, Expr* argv[]) {
-    if (argc != 1) {
-        return ErrorAbort(state, "%s() expects 1 arg, got %d", name, argc);
-    }
-
-    char* filename;
-    if (ReadArgs(state, argv, 1, &filename) < 0) return NULL;
-
-    char buffer[sizeof(((struct bootloader_message*)0)->stage)];
-    FILE* f = fopen(filename, "rb");
-    fseek(f, offsetof(struct bootloader_message, stage), SEEK_SET);
-    fread(buffer, sizeof(buffer), 1, f);
-    fclose(f);
-    buffer[sizeof(buffer)-1] = '\0';
-
-    return StringValue(strdup(buffer));
+    struct bootloader_message msg;
+    memset(&msg, 0, sizeof(msg));
+    if (get_bootloader_message(&msg))
+        printf("Failed getting BCB\n");
+    return StringValue(strdup(msg.stage));
 }
 
 Value* WipeBlockDeviceFn(const char* name, State* state, int argc, Expr* argv[]) {
@@ -1798,6 +1603,12 @@ Value* Tune2FsFn(const char* name, State* state, int argc, Expr* argv[]) {
 }
 
 void RegisterInstallFunctions() {
+    char fstab[256];
+    char mediatype[PROPERTY_VALUE_MAX];
+    property_get("ro.bootmode", mediatype, "");
+    sprintf(fstab, "/fstab_%s", mediatype);
+    load_volume_table(fstab);
+
     RegisterFunction("mount", MountFn);
     RegisterFunction("is_mounted", IsMountedFn);
     RegisterFunction("unmount", UnmountFn);
