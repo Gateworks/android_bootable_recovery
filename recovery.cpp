@@ -981,6 +981,8 @@ ui_print(const char* format, ...) {
 int
 main(int argc, char **argv) {
     time_t start = time(NULL);
+    char mediatype[PROPERTY_VALUE_MAX];
+    char fstab[PROPERTY_VALUE_MAX+16];
 
     redirect_stdio(TEMPORARY_LOG_FILE);
 
@@ -998,7 +1000,10 @@ main(int argc, char **argv) {
 
     printf("Starting recovery (pid %d) on %s", getpid(), ctime(&start));
 
-    load_volume_table();
+    property_get("ro.bootmode", mediatype, "");
+    sprintf(fstab, "/fstab_%s", mediatype);
+    load_volume_table(fstab);
+
     ensure_path_mounted(LAST_LOG_FILE);
     rotate_last_logs(KEEP_LOG_COUNT);
     get_args(&argc, &argv);

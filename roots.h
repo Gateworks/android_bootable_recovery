@@ -23,8 +23,8 @@
 extern "C" {
 #endif
 
-// Load and parse volume data from /etc/recovery.fstab.
-void load_volume_table();
+// Load and parse volume data from file
+void load_volume_table(const char* path);
 
 // Return the Volume* record for this path (or NULL).
 Volume* volume_for_path(const char* path);

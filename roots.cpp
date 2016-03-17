@@ -84,14 +84,14 @@ static int get_block_device_size(const char *filename, long long *block_size)
     return 0;
 }
 
-void load_volume_table()
+void load_volume_table(const char* filename)
 {
     int i;
     int ret;
 
-    fstab = fs_mgr_read_fstab("/etc/recovery.fstab");
+    fstab = fs_mgr_read_fstab(filename);
     if (!fstab) {
-        LOGE("failed to read /etc/recovery.fstab\n");
+        LOGE("failed to read %s\n", filename);
         return;
     }
 
